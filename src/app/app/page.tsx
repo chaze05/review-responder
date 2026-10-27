@@ -4,8 +4,9 @@ import { Sparkles } from "lucide-react";
 import { SignOutButton } from "@/components/sign-out-button";
 import { Composer } from "@/components/composer";
 import { HistoryList } from "@/components/history-list";
-import { createClient } from "@/lib/supabase/server";
-import type { Reply } from "@/types";
+import { withUser } from "@/lib/db";
+import { getSession } from "@/lib/session-cookies";
+import type { Reply, Tone } from "@/types";
 
 export const metadata = {
   title: "Workspace | Review Responder",
@@ -14,22 +15,42 @@ export const metadata = {
 export const instant = false;
 
 export default async function AppPage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const session = await getSession();
 
-  if (!user) {
+  if (!session) {
     redirect("/login");
   }
 
-  const { data: savedReplies } = await supabase
-    .from("reviews")
-    .select(
-      "id, user_id, business_name, review_text, rating, tone, reply_text, created_at"
-    )
-    .order("created_at", { ascending: false })
-    .limit(50);
+  let savedReplies: Reply[] = [];
+  let historyError = "";
+
+  try {
+    const result = await withUser(session.userId, (client) =>
+      client.query(
+        `select id, user_id, business_name, review_text, rating, tone, reply_text, created_at
+         from public.reviews
+         order by created_at desc
+         limit 50`
+      )
+    );
+
+    savedReplies = result.rows.map((row) => ({
+      id: String(row.id),
+      user_id: String(row.user_id),
+      business_name: String(row.business_name ?? ""),
+      review_text: String(row.review_text),
+      rating: row.rating === null ? null : Number(row.rating),
+      tone: row.tone as Tone,
+      reply_text: String(row.reply_text),
+      created_at: new Date(row.created_at).toISOString(),
+    }));
+  } catch (error) {
+    console.error(
+      "[app] history load failed:",
+      error instanceof Error ? error.message : "unknown error"
+    );
+    historyError = "Could not load saved replies. Refresh to try again.";
+  }
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -43,7 +64,7 @@ export default async function AppPage() {
           </div>
           <div className="flex items-center gap-3">
             <span className="hidden text-xs text-zinc-500 sm:inline">
-              {user.email}
+              {session.email}
             </span>
             <SignOutButton />
           </div>
@@ -72,10 +93,15 @@ export default async function AppPage() {
               </p>
             </div>
             <span className="rounded-full border border-zinc-800 px-2.5 py-1 text-xs text-zinc-500">
-              {savedReplies?.length ?? 0}
+              {savedReplies.length}
             </span>
           </div>
-          <HistoryList replies={(savedReplies ?? []) as Reply[]} />
+          {historyError && (
+            <p className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+              {historyError}
+            </p>
+          )}
+          <HistoryList replies={savedReplies} />
         </section>
       </main>
     </div>

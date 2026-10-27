@@ -1,6 +1,7 @@
 "use server";
 
 import { generateText, isAiConfigured } from "@/lib/ai";
+import { withUser } from "@/lib/db";
 import {
   REPLY_SYSTEM_INSTRUCTION,
   buildReplyPrompt,
@@ -8,22 +9,18 @@ import {
   isSafeReply,
 } from "@/lib/prompt";
 import { checkRateLimit } from "@/lib/rate-limit";
-import { createClient } from "@/lib/supabase/server";
+import { getSession } from "@/lib/session-cookies";
 import { parseReplyInput, parseSaveReply } from "@/lib/validation";
 
-const RATE_WINDOW_MS = 60 * 60 * 1000;
-const USAGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function generateReply(
   formData: FormData
 ): Promise<{ text: string } | { error: string }> {
   try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
+    const session = await getSession();
+    if (!session) {
       return { error: "Unauthorized" };
     }
 
@@ -39,23 +36,27 @@ export async function generateReply(
     }
 
     const now = new Date();
-    const windowStart = new Date(now.getTime() - RATE_WINDOW_MS).toISOString();
+    const limit = await withUser(session.userId, async (client) => {
+      const { rows } = await client.query(
+        `select created_at
+         from public.ai_usage
+         where user_id = $1
+           and created_at >= now() - interval '1 hour'`,
+        [session.userId]
+      );
 
-    const { data: usageRows, error: usageError } = await supabase
-      .from("ai_usage")
-      .select("created_at")
-      .eq("user_id", user.id)
-      .gte("created_at", windowStart);
+      const timestamps = rows.map((row) => new Date(row.created_at));
+      const result = checkRateLimit(timestamps, now);
 
-    if (usageError) {
-      console.error("[ai] usage lookup failed:", usageError.message);
-      return { error: "Could not check the AI limit. Please try again." };
-    }
+      if (!result.limited) {
+        await client.query(
+          "insert into public.ai_usage (user_id) values ($1)",
+          [session.userId]
+        );
+      }
 
-    const timestamps = ((usageRows ?? []) as Array<{ created_at: string }>).map(
-      (row) => new Date(row.created_at)
-    );
-    const limit = checkRateLimit(timestamps, now);
+      return result;
+    });
 
     if (limit.limited) {
       const minutes = limit.retryMinutes;
@@ -66,15 +67,6 @@ export async function generateReply(
       };
     }
 
-    const { error: usageInsertError } = await supabase
-      .from("ai_usage")
-      .insert({ user_id: user.id });
-
-    if (usageInsertError) {
-      console.error("[ai] usage insert failed:", usageInsertError.message);
-      return { error: "Could not start the AI request. Please try again." };
-    }
-
     const prompt = buildReplyPrompt(parsed.data);
     const raw = await generateText(prompt, REPLY_SYSTEM_INSTRUCTION);
     const text = cleanReply(raw);
@@ -83,11 +75,14 @@ export async function generateReply(
       return { error: "AI returned an unusable response. Please try again." };
     }
 
-    await supabase
-      .from("ai_usage")
-      .delete()
-      .eq("user_id", user.id)
-      .lt("created_at", new Date(Date.now() - USAGE_RETENTION_MS).toISOString());
+    await withUser(session.userId, (client) =>
+      client.query(
+        `delete from public.ai_usage
+         where user_id = $1
+           and created_at < now() - interval '7 days'`,
+        [session.userId]
+      )
+    ).catch(() => {});
 
     return { text };
   } catch (error) {
@@ -103,12 +98,8 @@ export async function saveReply(
   formData: FormData
 ): Promise<{ id: string; created_at: string } | { error: string }> {
   try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
+    const session = await getSession();
+    if (!session) {
       return { error: "Unauthorized" };
     }
 
@@ -117,27 +108,31 @@ export async function saveReply(
       return { error: parsed.error };
     }
 
-    const { data, error } = await supabase
-      .from("reviews")
-      .insert({
-        user_id: user.id,
-        business_name: parsed.data.businessName,
-        review_text: parsed.data.reviewText,
-        rating: parsed.data.rating,
-        tone: parsed.data.tone,
-        reply_text: parsed.data.replyText,
-      })
-      .select("id, created_at")
-      .single();
+    const result = await withUser(session.userId, (client) =>
+      client.query(
+        `insert into public.reviews
+           (user_id, business_name, review_text, rating, tone, reply_text)
+         values ($1, $2, $3, $4, $5, $6)
+         returning id, created_at`,
+        [
+          session.userId,
+          parsed.data.businessName,
+          parsed.data.reviewText,
+          parsed.data.rating,
+          parsed.data.tone,
+          parsed.data.replyText,
+        ]
+      )
+    );
 
-    if (error || !data) {
-      console.error("[replies] save failed:", error?.message ?? "no row returned");
+    const row = result.rows[0];
+    if (!row) {
       return { error: "Could not save the reply. Please try again." };
     }
 
     return {
-      id: data.id as string,
-      created_at: data.created_at as string,
+      id: String(row.id),
+      created_at: new Date(row.created_at).toISOString(),
     };
   } catch (error) {
     console.error(
@@ -152,25 +147,18 @@ export async function deleteReply(
   id: string
 ): Promise<{ ok: true } | { error: string }> {
   try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
+    const session = await getSession();
+    if (!session) {
       return { error: "Unauthorized" };
     }
 
-    if (!id.trim()) {
-      return { error: "Missing reply id." };
+    if (!UUID_PATTERN.test(id)) {
+      return { error: "Invalid reply id." };
     }
 
-    const { error } = await supabase.from("reviews").delete().eq("id", id);
-
-    if (error) {
-      console.error("[replies] delete failed:", error.message);
-      return { error: "Could not delete the reply. Please try again." };
-    }
+    await withUser(session.userId, (client) =>
+      client.query("delete from public.reviews where id = $1", [id])
+    );
 
     return { ok: true };
   } catch (error) {
