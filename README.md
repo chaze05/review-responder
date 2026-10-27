@@ -1,107 +1,163 @@
 # Review Responder
 
-Paste a customer review, choose a tone, and get an editable reply you can copy or save. Built for small business owners who want to respond well without spending twenty minutes per review.
+Standalone version: paste a customer review, choose a tone, and get an editable reply you can copy or save. No Supabase — just Next.js, PostgreSQL, native RLS, and local email/password auth.
 
 ## Features
 
-- Email/password authentication with Supabase.
+- Email/password signup, login, and logout with an HttpOnly session cookie.
 - Optional business name, star rating, and tone (friendly, professional, apologetic).
 - Gemini-generated replies capped at 600 characters, in the review's language.
 - Editable draft with copy, regenerate, and save.
 - Private saved-reply history with delete.
+- PostgreSQL Row Level Security on reviews and usage records.
 - 30 generation requests per user per rolling hour.
-- Row Level Security: users can only read, create, and delete their own data.
+
+## Stack
+
+- Next.js 16 App Router, TypeScript, Tailwind CSS.
+- PostgreSQL 16 locally via Docker Compose; any managed Postgres (Neon, Railway, Supabase Postgres) in production.
+- `pg` for queries, `jose` for session JWTs, `bcryptjs` for password hashing.
+- Gemini REST API for reply generation.
+- Vitest for unit tests.
 
 ## Prerequisites
 
 - Node.js 22 or newer.
-- A free [Supabase](https://supabase.com) project.
+- Docker Desktop for the local database, or a managed Postgres connection string.
 - A [Gemini API key](https://aistudio.google.com/apikey).
 
 ## Local setup
 
 1. Install dependencies:
 
-   ```bash
+   ```powershell
    npm.cmd install
    ```
 
-   On macOS or Linux, use `npm install`.
+   On macOS/Linux, use `npm install`.
 
-2. Create `.env.local` from the template and fill in the values:
+2. Start PostgreSQL:
 
-   ```bash
-   cp .env.example .env.local
+   ```powershell
+   npm.cmd run db:up
    ```
 
-   | Variable | Value |
+   This starts `postgres:16-alpine` on **port 5433**, database `review_responder`, and creates a non-superuser `app_user` role. Data lives in the `db_data` Docker volume.
+
+3. Create `.env.local` from `.env.example` and fill in `AUTH_SECRET` (any random string of 32+ characters) and `GEMINI_API_KEY`:
+
+   ```powershell
+   Copy-Item .env.example .env.local
+   ```
+
+   The default local URLs are:
+
+   | Variable | Local value |
    | --- | --- |
-   | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
-   | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon/public key |
-   | `GEMINI_API_KEY` | Google AI Studio API key |
+   | `DATABASE_URL` | `postgres://app_user:app_password@localhost:5433/review_responder` |
+   | `ADMIN_DATABASE_URL` | `postgres://postgres:postgres@localhost:5433/review_responder` |
+   | `AUTH_SECRET` | 32+ random characters |
+   | `GEMINI_API_KEY` | Google AI Studio key |
    | `GEMINI_MODEL` | Optional; defaults to `gemini-2.0-flash` |
 
-3. Apply the database schema. In the Supabase dashboard, open **SQL Editor**, paste the contents of `supabase/migrations/0001_init.sql`, and run it. The migration creates the `reviews` and `ai_usage` tables, indexes, RLS policies, and grants.
+4. Apply the schema:
 
-4. Configure authentication URLs in Supabase under **Authentication → URL Configuration**:
-   - Site URL: `http://localhost:3000`
-   - Redirect URLs: `http://localhost:3000/auth/confirm`
+   ```powershell
+   npm.cmd run db:migrate
+   ```
 
-   Add the production equivalents after deploying.
+   The migration creates `users`, `reviews`, `ai_usage`, `app.current_user_id()`, the auth functions, and the RLS policies. It runs as the admin role; the app connects as `app_user`.
 
-5. Start the dev server:
+5. Start the app:
 
-   ```bash
+   ```powershell
    npm.cmd run dev
    ```
 
 6. Open <http://localhost:3000>, create an account, and generate a reply.
 
+## How RLS works here
+
+The app connection role (`app_user`) is **not** a superuser and has no `BYPASSRLS`. `reviews` and `ai_usage` have `ENABLE` + **`FORCE`** row-level security.
+
+Every query runs through `withUser(userId, fn)` in `src/lib/db.ts`:
+
+1. Open a transaction.
+2. Run `select set_config('app.user_id', $1, true)`.
+3. Run the query.
+4. Commit or roll back.
+
+Policies compare rows to `app.current_user_id()`, which reads `current_setting('app.user_id', true)`. Without the setting, the value is null and RLS denies every row. The app role cannot read the `users` table directly; signup and login go through security-definer functions.
+
+Verify isolation against the real database:
+
+```powershell
+npm.cmd run db:test-rls
+```
+
+The script creates two users, inserts a review as user A, and confirms user B cannot read, delete, or insert as user A, then cleans up.
+
 ## Scripts
 
 | Command | Purpose |
 | --- | --- |
-| `npm.cmd run dev` | Start the development server |
-| `npm.cmd test` | Run the Vitest suite |
+| `npm.cmd run dev` | Start the Next.js dev server |
+| `npm.cmd run db:up` | Start local Postgres |
+| `npm.cmd run db:down` | Stop local Postgres |
+| `npm.cmd run db:migrate` | Apply `db/migrations/*.sql` |
+| `npm.cmd run db:test-rls` | Run the two-user RLS check |
+| `npm.cmd test` | Run Vitest |
 | `npm.cmd run lint` | Run ESLint |
 | `npm.cmd run build` | Production build |
-| `npm.cmd start` | Start the production server |
 
-## How it works
+## Deploy to Vercel + managed Postgres
 
-- The `/app` page is protected by `src/proxy.ts` and re-checks the Supabase session on the server.
-- `generateReply` validates input, enforces the rolling-hour limit, records usage, builds a grounded prompt, calls Gemini, and cleans the output. The review text is only stored when the user explicitly saves the reply.
-- The Gemini key stays server-side. Browser code only sees the Supabase URL and anon key.
-- RLS policies restrict every table operation to the signed-in user.
+SQLite is intentionally not used: Vercel has no persistent filesystem. Use a managed Postgres such as Neon (free tier works).
 
-## Deploy to Vercel
+1. Create a Postgres database at <https://neon.tech> (or another provider).
+2. Run the migration against it with an admin connection string:
 
-1. Push this repository to GitHub.
-2. Import the repository at <https://vercel.com/new>.
-3. Add the four environment variables from the table above.
-4. Deploy.
-5. In Supabase **Authentication → URL Configuration**, set the Site URL to the production URL and add `https://<your-domain>/auth/confirm` as a redirect URL.
-6. Run the live smoke test below.
+   ```powershell
+   $env:ADMIN_DATABASE_URL = "postgres://<user>:<password>@<host>/<database>?sslmode=require"
+   npm.cmd run db:migrate
+   ```
 
-## Verification
+   Do not commit this URL.
+3. Import the repository at <https://vercel.com/new>.
+4. Add the environment variables:
+   - `DATABASE_URL` — the pooled connection string used by the app
+   - `AUTH_SECRET` — 32+ random characters
+   - `GEMINI_API_KEY`
+   - `GEMINI_MODEL` (optional)
+5. Deploy and run the live smoke test below.
 
-Automated:
+The production database role must not be a superuser or have `BYPASSRLS`. `FORCE ROW LEVEL SECURITY` covers table ownership.
 
-```bash
-npm.cmd run lint
-npm.cmd test
-npm.cmd run build
-```
+## Path to Supabase later
 
-Manual smoke test:
+The schema is standard PostgreSQL. To move to Supabase:
 
-1. Sign up, confirm your email if confirmation is enabled, and sign in.
-2. Generate replies with two different tones; confirm each is under 600 characters and plain text.
+1. Apply the same tables and RLS policies to the Supabase Postgres database.
+2. Replace the JWT cookie auth with Supabase Auth.
+3. Map `app.current_user_id()` to `auth.uid()` (or set `app.user_id` in the query wrapper).
+4. Keep `withUser` if you want the same transaction-local user setting.
+
+The original Supabase implementation remains on the `main` branch as a reference.
+
+## Security notes
+
+- `AUTH_SECRET` and `GEMINI_API_KEY` are server-only.
+- Passwords are hashed with bcrypt cost 12; never logged.
+- Review text is stored only when the user saves a reply; no review text is logged.
+- The app role cannot read `users` directly and cannot alter the schema.
+- Prompt boundaries are escaped, with a system instruction and an output sentinel guard.
+- v1 has no email verification or password reset.
+
+## Live smoke test
+
+1. Sign up, then confirm you land on `/app`.
+2. Generate replies with two tones; confirm each is under 600 characters and plain text.
 3. Copy a reply, save it, confirm it appears under **Saved replies**, then delete it.
-4. Create a second account and confirm it cannot see the first account's saved replies.
+4. Create a second account and confirm it cannot see the first account's replies.
 5. Sign out and open `/app`; confirm the redirect to `/login`.
 6. Temporarily remove `GEMINI_API_KEY`; confirm the composer shows the "AI is not configured" message instead of crashing.
-
-## Stack
-
-Next.js 16 (App Router), TypeScript, Tailwind CSS, Supabase Auth/Postgres, Gemini, Vitest, Vercel.
