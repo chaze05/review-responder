@@ -80,7 +80,14 @@ const authEmailSchema = z
 
 export const signUpSchema = z.object({
   email: authEmailSchema,
-  password: z.string().min(8, "Password must be at least 8 characters.").max(200),
+  password: z
+    .string()
+    .min(8, "Password must be at least 8 characters.")
+    .max(200)
+    .refine(
+      (value) => new TextEncoder().encode(value).length <= 72,
+      "Password must be 72 bytes or fewer."
+    ),
 });
 
 export const signInSchema = z.object({

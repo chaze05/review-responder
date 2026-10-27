@@ -197,4 +197,40 @@ describe("auth schemas", () => {
       signInSchema.safeParse({ email: "owner@example.com", password: "x" }).success
     ).toBe(true);
   });
+
+  it("rejects passwords over bcrypt's 72-byte limit", () => {
+    expect(
+      signUpSchema.safeParse({
+        email: "owner@example.com",
+        password: "a".repeat(72),
+      }).success
+    ).toBe(true);
+    expect(
+      signUpSchema.safeParse({
+        email: "owner@example.com",
+        password: "a".repeat(73),
+      }).success
+    ).toBe(false);
+  });
+
+  it("counts emoji by code point in review and reply limits", () => {
+    expect(
+      replyInputSchema.safeParse({
+        ...valid,
+        reviewText: "😀".repeat(800),
+      }).success
+    ).toBe(true);
+    expect(
+      saveReplySchema.safeParse({
+        ...valid,
+        replyText: "😀".repeat(400),
+      }).success
+    ).toBe(true);
+    expect(
+      saveReplySchema.safeParse({
+        ...valid,
+        replyText: "😀".repeat(601),
+      }).success
+    ).toBe(false);
+  });
 });

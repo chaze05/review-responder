@@ -30,6 +30,24 @@ async function withUser(client, userId, fn) {
 const client = new Client({ connectionString: appUrl });
 await client.connect();
 
+const roleCheck = await client.query(
+  "select rolsuper, rolbypassrls from pg_roles where rolname = current_user"
+);
+assert(
+  roleCheck.rows[0] &&
+    !roleCheck.rows[0].rolsuper &&
+    !roleCheck.rows[0].rolbypassrls,
+  "the app role must not be a superuser or have BYPASSRLS"
+);
+
+let usersBlocked = false;
+try {
+  await client.query("select 1 from public.users limit 1");
+} catch {
+  usersBlocked = true;
+}
+assert(usersBlocked, "the app role must not read users directly");
+
 const stamp = Date.now();
 let userA;
 let userB;
@@ -96,6 +114,26 @@ try {
   );
   assert(stillThere.rowCount === 1, "user A's review should still exist");
 
+  const attemptKey = `rls-attempt-${stamp}`;
+  const firstAttempt = await client.query(
+    "select app.record_auth_attempt($1, 2, 60) as allowed",
+    [attemptKey]
+  );
+  const secondAttempt = await client.query(
+    "select app.record_auth_attempt($1, 2, 60) as allowed",
+    [attemptKey]
+  );
+  const thirdAttempt = await client.query(
+    "select app.record_auth_attempt($1, 2, 60) as allowed",
+    [attemptKey]
+  );
+  assert(
+    firstAttempt.rows[0].allowed === true &&
+      secondAttempt.rows[0].allowed === true &&
+      thirdAttempt.rows[0].allowed === false,
+    "auth attempts should allow two and block the third"
+  );
+
   await withUser(client, userA.id, () =>
     client.query("delete from public.reviews where id = $1", [reviewId])
   );
@@ -119,6 +157,7 @@ try {
         await admin.query("delete from public.reviews where user_id = $1", [userB.id]);
         await admin.query("delete from public.users where id = $1", [userB.id]);
       }
+      await admin.query("delete from public.auth_attempts where key like 'rls-attempt-%'");
       console.log("Test users cleaned up.");
     } finally {
       await admin.end();

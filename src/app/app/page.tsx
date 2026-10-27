@@ -29,8 +29,10 @@ export default async function AppPage() {
       client.query(
         `select id, user_id, business_name, review_text, rating, tone, reply_text, created_at
          from public.reviews
+         where user_id = $1
          order by created_at desc
-         limit 50`
+         limit 50`,
+        [session.userId]
       )
     );
 

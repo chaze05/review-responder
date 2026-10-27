@@ -1,3 +1,18 @@
+do $$
+begin
+  if not exists (select 1 from pg_roles where rolname = 'app_user') then
+    raise exception 'Create the app_user role (NOSUPERUSER NOBYPASSRLS) before running this migration.';
+  end if;
+
+  if exists (
+    select 1 from pg_roles
+    where rolname = 'app_user' and (rolsuper or rolbypassrls)
+  ) then
+    raise exception 'app_user must not be a superuser or have BYPASSRLS.';
+  end if;
+end
+$$;
+
 create table public.users (
   id uuid primary key default gen_random_uuid(),
   email text not null,
@@ -32,6 +47,14 @@ create table public.ai_usage (
 );
 
 create index ai_usage_user_created_idx on public.ai_usage (user_id, created_at);
+
+create table public.auth_attempts (
+  id bigint generated always as identity primary key,
+  key text not null,
+  created_at timestamptz not null default now()
+);
+
+create index auth_attempts_key_created_idx on public.auth_attempts (key, created_at);
 
 create schema if not exists app;
 
@@ -101,17 +124,48 @@ as $$
   where lower(users.email) = lower(trim(p_email));
 $$;
 
+create or replace function app.record_auth_attempt(
+  p_key text,
+  p_limit integer,
+  p_window_seconds integer
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  recent integer;
+begin
+  perform pg_advisory_xact_lock(hashtext(p_key));
+
+  delete from public.auth_attempts
+  where created_at < now() - interval '1 day';
+
+  select count(*) into recent
+  from public.auth_attempts
+  where key = p_key
+    and created_at >= now() - make_interval(secs => p_window_seconds);
+
+  if recent >= p_limit then
+    return false;
+  end if;
+
+  insert into public.auth_attempts (key) values (p_key);
+  return true;
+end;
+$$;
+
 revoke all on public.users from public;
+revoke all on public.auth_attempts from public;
 revoke execute on function app.create_user(text, text) from public;
 revoke execute on function app.get_user_for_login(text) from public;
+revoke execute on function app.record_auth_attempt(text, integer, integer) from public;
 
-do $$
-begin
-  if exists (select 1 from pg_roles where rolname = 'app_user') then
-    execute 'revoke all on public.users from app_user';
-    execute 'grant usage on schema app, public to app_user';
-    execute 'grant select, insert, delete on public.reviews, public.ai_usage to app_user';
-    execute 'grant execute on function app.create_user(text, text), app.get_user_for_login(text) to app_user';
-  end if;
-end
-$$;
+revoke all on public.users from app_user;
+revoke all on public.auth_attempts from app_user;
+grant usage on schema app, public to app_user;
+grant select, insert, delete on public.reviews, public.ai_usage to app_user;
+grant execute on function app.create_user(text, text) to app_user;
+grant execute on function app.get_user_for_login(text) to app_user;
+grant execute on function app.record_auth_attempt(text, integer, integer) to app_user;

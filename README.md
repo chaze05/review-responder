@@ -104,7 +104,8 @@ The script creates two users, inserts a review as user A, and confirms user B ca
 | `npm.cmd run dev` | Start the Next.js dev server |
 | `npm.cmd run db:up` | Start local Postgres |
 | `npm.cmd run db:down` | Stop local Postgres |
-| `npm.cmd run db:migrate` | Apply `db/migrations/*.sql` |
+| `npm.cmd run db:migrate` | Apply pending `db/migrations/*.sql` |
+| `npm.cmd run db:migrate:prod` | Apply migrations using the current environment (no `.env.local` assumption) |
 | `npm.cmd run db:test-rls` | Run the two-user RLS check |
 | `npm.cmd test` | Run Vitest |
 | `npm.cmd run lint` | Run ESLint |
@@ -115,23 +116,33 @@ The script creates two users, inserts a review as user A, and confirms user B ca
 SQLite is intentionally not used: Vercel has no persistent filesystem. Use a managed Postgres such as Neon (free tier works).
 
 1. Create a Postgres database at <https://neon.tech> (or another provider).
-2. Run the migration against it with an admin connection string:
+2. Connect as the database owner/admin and create a **restricted** app role with a generated password:
 
-   ```powershell
-   $env:ADMIN_DATABASE_URL = "postgres://<user>:<password>@<host>/<database>?sslmode=require"
-   npm.cmd run db:migrate
+   ```sql
+   create role app_user login password '<GENERATED_PASSWORD>' nosuperuser nobypassrls;
+   select rolname, rolsuper, rolbypassrls from pg_roles where rolname = 'app_user';
    ```
 
-   Do not commit this URL.
-3. Import the repository at <https://vercel.com/new>.
-4. Add the environment variables:
-   - `DATABASE_URL` — the pooled connection string used by the app
+   The second query must return `rolsuper = false` and `rolbypassrls = false`. Do not create this role through the Neon Console/CLI/API if it grants `neon_superuser` or `BYPASSRLS`; create it with SQL and verify.
+
+3. Run the migration with an admin connection string. The migration fails unless `app_user` exists and is safe:
+
+   ```powershell
+   $env:ADMIN_DATABASE_URL = "postgres://<owner>:<password>@<host>/<database>?sslmode=require"
+   npm.cmd run db:migrate:prod
+   ```
+
+   Do not commit this URL. Migrations are tracked in `public.schema_migrations`; reruns skip applied files.
+
+4. Import the repository at <https://vercel.com/new>.
+5. Add the environment variables:
+   - `DATABASE_URL` — the connection string for **app_user** (not the owner/admin role)
    - `AUTH_SECRET` — 32+ random characters
    - `GEMINI_API_KEY`
    - `GEMINI_MODEL` (optional)
-5. Deploy and run the live smoke test below.
+6. Deploy and run the live smoke test below.
 
-The production database role must not be a superuser or have `BYPASSRLS`. `FORCE ROW LEVEL SECURITY` covers table ownership.
+The app verifies its database role on first query and **fails closed** if the role is a superuser or has `BYPASSRLS`. `FORCE ROW LEVEL SECURITY` covers table ownership. The local Docker password in `db/init` is for localhost only; never reuse it in production.
 
 ## Path to Supabase later
 
@@ -150,6 +161,8 @@ The original Supabase implementation remains on the `main` branch as a reference
 - Passwords are hashed with bcrypt cost 12; never logged.
 - Review text is stored only when the user saves a reply; no review text is logged.
 - The app role cannot read `users` directly and cannot alter the schema.
+- Auth throttling: 5 signups/hour/IP, 20 sign-in attempts/15 min/IP, and 10/15 min per email.
+- Generation limits: 30 requests/hour/user (attempts count, including failures); saves are capped at 100/hour/user.
 - Prompt boundaries are escaped, with a system instruction and an output sentinel guard.
 - v1 has no email verification or password reset.
 

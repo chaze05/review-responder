@@ -1,5 +1,7 @@
 "use server";
 
+import { headers } from "next/headers";
+
 import { query } from "@/lib/db";
 import { hashPassword, verifyPassword } from "@/lib/password";
 import { signSession } from "@/lib/session";
@@ -20,6 +22,25 @@ function isUniqueViolation(error: unknown): boolean {
   );
 }
 
+async function getClientIp(): Promise<string> {
+  const headerStore = await headers();
+  const forwarded = headerStore.get("x-forwarded-for");
+  return forwarded?.split(",")[0]?.trim() || "local";
+}
+
+async function allowAttempt(
+  key: string,
+  limit: number,
+  windowSeconds: number
+): Promise<boolean> {
+  const { rows } = await query<{ allowed: boolean }>(
+    "select app.record_auth_attempt($1, $2, $3) as allowed",
+    [key, limit, windowSeconds]
+  );
+
+  return Boolean(rows[0]?.allowed);
+}
+
 export async function signUp(
   formData: FormData
 ): Promise<{ ok: true } | { error: string }> {
@@ -33,6 +54,12 @@ export async function signUp(
   }
 
   try {
+    const ip = await getClientIp();
+
+    if (!(await allowAttempt(`signup:${ip}`, 5, 3600))) {
+      return { error: "Too many signup attempts. Please try again later." };
+    }
+
     const passwordHash = await hashPassword(parsed.data.password);
     const { rows } = await query<{ id: string; email: string }>(
       "select id, email from app.create_user($1, $2)",
@@ -74,6 +101,18 @@ export async function signIn(
   }
 
   try {
+    const ip = await getClientIp();
+    const ipAllowed = await allowAttempt(`login-ip:${ip}`, 20, 900);
+    const emailAllowed = await allowAttempt(
+      `login-email:${parsed.data.email}`,
+      10,
+      900
+    );
+
+    if (!ipAllowed || !emailAllowed) {
+      return { error: "Too many sign-in attempts. Please try again later." };
+    }
+
     const { rows } = await query<{
       id: string;
       email: string;

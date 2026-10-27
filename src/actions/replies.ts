@@ -37,6 +37,10 @@ export async function generateReply(
 
     const now = new Date();
     const limit = await withUser(session.userId, async (client) => {
+      await client.query("select pg_advisory_xact_lock(hashtext($1))", [
+        session.userId,
+      ]);
+
       const { rows } = await client.query(
         `select created_at
          from public.ai_usage
@@ -108,8 +112,20 @@ export async function saveReply(
       return { error: parsed.error };
     }
 
-    const result = await withUser(session.userId, (client) =>
-      client.query(
+    const result = await withUser(session.userId, async (client) => {
+      const count = await client.query<{ count: number }>(
+        `select count(*)::int as count
+         from public.reviews
+         where user_id = $1
+           and created_at >= now() - interval '1 hour'`,
+        [session.userId]
+      );
+
+      if (Number(count.rows[0]?.count ?? 0) >= 100) {
+        return { limited: true as const };
+      }
+
+      const inserted = await client.query(
         `insert into public.reviews
            (user_id, business_name, review_text, rating, tone, reply_text)
          values ($1, $2, $3, $4, $5, $6)
@@ -122,18 +138,25 @@ export async function saveReply(
           parsed.data.tone,
           parsed.data.replyText,
         ]
-      )
-    );
+      );
 
-    const row = result.rows[0];
-    if (!row) {
-      return { error: "Could not save the reply. Please try again." };
+      const row = inserted.rows[0];
+      if (!row) {
+        throw new Error("insert returned no row");
+      }
+
+      return {
+        limited: false as const,
+        id: String(row.id),
+        created_at: new Date(row.created_at).toISOString(),
+      };
+    });
+
+    if (result.limited) {
+      return { error: "Save limit reached for this hour. Please try again later." };
     }
 
-    return {
-      id: String(row.id),
-      created_at: new Date(row.created_at).toISOString(),
-    };
+    return { id: result.id, created_at: result.created_at };
   } catch (error) {
     console.error(
       "[replies] save failed:",
@@ -157,7 +180,10 @@ export async function deleteReply(
     }
 
     await withUser(session.userId, (client) =>
-      client.query("delete from public.reviews where id = $1", [id])
+      client.query("delete from public.reviews where id = $1 and user_id = $2", [
+        id,
+        session.userId,
+      ])
     );
 
     return { ok: true };

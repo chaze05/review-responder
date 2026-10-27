@@ -28,4 +28,20 @@ describe("standalone RLS migration", () => {
   it("does not let the app role read the users table directly", () => {
     expect(migration).toContain("revoke all on public.users from app_user");
   });
+
+  it("requires a safe app_user role", () => {
+    expect(migration).toContain(
+      "app_user must not be a superuser or have BYPASSRLS"
+    );
+    expect(migration).toContain(
+      "Create the app_user role (NOSUPERUSER NOBYPASSRLS)"
+    );
+  });
+
+  it("adds database-backed auth attempt throttling", () => {
+    expect(migration).toContain("record_auth_attempt");
+    expect(migration).toContain(
+      "grant execute on function app.record_auth_attempt"
+    );
+  });
 });
