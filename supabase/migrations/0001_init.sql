@@ -58,7 +58,10 @@ create policy "ai_usage_insert_own"
   to authenticated
   with check (auth.uid() = user_id);
 
-create policy "ai_usage_delete_own"
+create policy "ai_usage_delete_own_old"
   on public.ai_usage for delete
   to authenticated
-  using (auth.uid() = user_id);
+  using (
+    auth.uid() = user_id
+    and created_at < now() - interval '7 days'
+  );

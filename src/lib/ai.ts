@@ -5,11 +5,30 @@ export function isAiConfigured(): boolean {
   return Boolean(process.env.GEMINI_API_KEY);
 }
 
-export async function generateText(prompt: string): Promise<string> {
+export async function generateText(
+  prompt: string,
+  systemInstruction?: string
+): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
     throw new Error("AI is not configured yet.");
+  }
+
+  const payload: {
+    contents: Array<{ parts: Array<{ text: string }> }>;
+    generationConfig: { temperature: number; maxOutputTokens: number };
+    systemInstruction?: { parts: Array<{ text: string }> };
+  } = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.5,
+      maxOutputTokens: 400,
+    },
+  };
+
+  if (systemInstruction) {
+    payload.systemInstruction = { parts: [{ text: systemInstruction }] };
   }
 
   const response = await fetch(
@@ -17,13 +36,7 @@ export async function generateText(prompt: string): Promise<string> {
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.5,
-          maxOutputTokens: 400,
-        },
-      }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     }
   );

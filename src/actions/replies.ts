@@ -1,7 +1,12 @@
 "use server";
 
 import { generateText, isAiConfigured } from "@/lib/ai";
-import { buildReplyPrompt, cleanReply } from "@/lib/prompt";
+import {
+  REPLY_SYSTEM_INSTRUCTION,
+  buildReplyPrompt,
+  cleanReply,
+  isSafeReply,
+} from "@/lib/prompt";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { createClient } from "@/lib/supabase/server";
 import { parseReplyInput, parseSaveReply } from "@/lib/validation";
@@ -71,11 +76,11 @@ export async function generateReply(
     }
 
     const prompt = buildReplyPrompt(parsed.data);
-    const raw = await generateText(prompt);
+    const raw = await generateText(prompt, REPLY_SYSTEM_INSTRUCTION);
     const text = cleanReply(raw);
 
-    if (!text) {
-      return { error: "AI returned an empty response. Please try again." };
+    if (!text || !isSafeReply(text)) {
+      return { error: "AI returned an unusable response. Please try again." };
     }
 
     await supabase

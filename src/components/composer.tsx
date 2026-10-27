@@ -19,6 +19,10 @@ const TONES: Array<{ value: Tone; label: string }> = [
   { value: "apologetic", label: "Apologetic" },
 ];
 
+function countCharacters(value: string): number {
+  return Array.from(value).length;
+}
+
 export function Composer() {
   const router = useRouter();
   const [businessName, setBusinessName] = useState("");
@@ -31,7 +35,7 @@ export function Composer() {
   const [saveMessage, setSaveMessage] = useState("");
   const [isPending, startTransition] = useTransition();
 
-  const canGenerate = reviewText.trim().length >= 20;
+  const canGenerate = countCharacters(reviewText.trim()) >= 20;
 
   function generate() {
     setError("");
@@ -115,8 +119,12 @@ export function Composer() {
             <input
               id="business-name"
               value={businessName}
-              onChange={(event) => setBusinessName(event.target.value)}
-              maxLength={100}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (countCharacters(value) <= 100) {
+                  setBusinessName(value);
+                }
+              }}
               placeholder="e.g. Acme Salon"
               className={inputClass}
             />
@@ -138,15 +146,19 @@ export function Composer() {
             <textarea
               id="review-text"
               value={reviewText}
-              onChange={(event) => setReviewText(event.target.value)}
-              maxLength={1_500}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (countCharacters(value) <= 1_500) {
+                  setReviewText(value);
+                }
+              }}
               rows={8}
               placeholder="Paste the review here…"
               className={`${inputClass} resize-y`}
             />
             <div className="flex items-center justify-between text-xs text-zinc-600">
               <span>Minimum 20 characters.</span>
-              <span>{reviewText.length}/1,500</span>
+              <span>{countCharacters(reviewText)}/1,500</span>
             </div>
           </div>
 
@@ -208,7 +220,9 @@ export function Composer() {
             </p>
           </div>
           {replyText && (
-            <span className="text-xs text-zinc-500">{replyText.length}/600</span>
+            <span className="text-xs text-zinc-500">
+              {countCharacters(replyText)}/600
+            </span>
           )}
         </div>
 
@@ -217,10 +231,12 @@ export function Composer() {
             <textarea
               value={replyText}
               onChange={(event) => {
-                setReplyText(event.target.value);
-                setSaveMessage("");
+                const value = event.target.value;
+                if (countCharacters(value) <= 600) {
+                  setReplyText(value);
+                  setSaveMessage("");
+                }
               }}
-              maxLength={600}
               rows={12}
               className={`${inputClass} resize-y`}
             />
@@ -232,8 +248,8 @@ export function Composer() {
                   onClick={save}
                   disabled={
                     isSaving ||
-                    replyText.trim().length === 0 ||
-                    replyText.length > 600
+                    countCharacters(replyText.trim()) === 0 ||
+                    countCharacters(replyText) > 600
                   }
                   className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                 >
