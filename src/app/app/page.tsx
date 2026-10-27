@@ -3,7 +3,9 @@ import { Sparkles } from "lucide-react";
 
 import { SignOutButton } from "@/components/sign-out-button";
 import { Composer } from "@/components/composer";
+import { HistoryList } from "@/components/history-list";
 import { createClient } from "@/lib/supabase/server";
+import type { Reply } from "@/types";
 
 export const metadata = {
   title: "Workspace | Review Responder",
@@ -20,6 +22,14 @@ export default async function AppPage() {
   if (!user) {
     redirect("/login");
   }
+
+  const { data: savedReplies } = await supabase
+    .from("reviews")
+    .select(
+      "id, user_id, business_name, review_text, rating, tone, reply_text, created_at"
+    )
+    .order("created_at", { ascending: false })
+    .limit(50);
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -50,6 +60,23 @@ export default async function AppPage() {
           </p>
         </div>
         <Composer />
+
+        <section className="mt-10">
+          <div className="mb-4 flex items-end justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold text-zinc-100">
+                Saved replies
+              </h2>
+              <p className="mt-1 text-sm text-zinc-500">
+                Your private history, newest first.
+              </p>
+            </div>
+            <span className="rounded-full border border-zinc-800 px-2.5 py-1 text-xs text-zinc-500">
+              {savedReplies?.length ?? 0}
+            </span>
+          </div>
+          <HistoryList replies={(savedReplies ?? []) as Reply[]} />
+        </section>
       </main>
     </div>
   );

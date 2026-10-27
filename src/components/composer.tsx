@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Loader2, MessageSquareQuote, Wand2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Loader2, MessageSquareQuote, Save, Wand2 } from "lucide-react";
 
-import { generateReply } from "@/actions/replies";
+import { generateReply, saveReply } from "@/actions/replies";
 import type { Tone } from "@/types";
 
 import { CopyButton } from "./copy-button";
@@ -19,18 +20,22 @@ const TONES: Array<{ value: Tone; label: string }> = [
 ];
 
 export function Composer() {
+  const router = useRouter();
   const [businessName, setBusinessName] = useState("");
   const [reviewText, setReviewText] = useState("");
   const [rating, setRating] = useState<number | null>(null);
   const [tone, setTone] = useState<Tone>("friendly");
   const [replyText, setReplyText] = useState("");
   const [error, setError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState("");
   const [isPending, startTransition] = useTransition();
 
   const canGenerate = reviewText.trim().length >= 20;
 
   function generate() {
     setError("");
+    setSaveMessage("");
 
     startTransition(async () => {
       const formData = new FormData();
@@ -58,6 +63,35 @@ export function Composer() {
     setReviewText(EXAMPLE_REVIEW);
     setRating(3);
     setError("");
+  }
+
+  async function save() {
+    setError("");
+    setSaveMessage("");
+    setIsSaving(true);
+
+    const formData = new FormData();
+    formData.set("businessName", businessName);
+    formData.set("reviewText", reviewText);
+    formData.set("rating", rating === null ? "" : String(rating));
+    formData.set("tone", tone);
+    formData.set("replyText", replyText);
+
+    try {
+      const result = await saveReply(formData);
+
+      if ("error" in result) {
+        setError(result.error);
+        return;
+      }
+
+      setSaveMessage("Saved to your history.");
+      router.refresh();
+    } catch {
+      setError("Could not save the reply. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   const inputClass =
@@ -182,13 +216,38 @@ export function Composer() {
           <div className="flex flex-col gap-4">
             <textarea
               value={replyText}
-              onChange={(event) => setReplyText(event.target.value)}
+              onChange={(event) => {
+                setReplyText(event.target.value);
+                setSaveMessage("");
+              }}
               maxLength={600}
               rows={12}
               className={`${inputClass} resize-y`}
             />
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <CopyButton text={replyText} />
+              <div className="flex flex-wrap items-center gap-2">
+                <CopyButton text={replyText} />
+                <button
+                  type="button"
+                  onClick={save}
+                  disabled={
+                    isSaving ||
+                    replyText.trim().length === 0 ||
+                    replyText.length > 600
+                  }
+                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isSaving ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4" />
+                  )}
+                  {isSaving ? "Saving…" : "Save reply"}
+                </button>
+                {saveMessage && (
+                  <span className="text-xs text-emerald-400">{saveMessage}</span>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={generate}
