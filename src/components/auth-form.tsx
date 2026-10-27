@@ -4,7 +4,7 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Eye, EyeOff, Loader2, Sparkles } from "lucide-react";
 
-import { createClient } from "@/lib/supabase/client";
+import { signIn, signUp } from "@/actions/auth";
 
 type Mode = "signin" | "signup";
 
@@ -21,65 +21,33 @@ export function AuthForm({ initialError }: AuthFormProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState(initialError ?? "");
-  const [message, setMessage] = useState("");
 
   function switchMode(next: Mode) {
     setMode(next);
     setError("");
-    setMessage("");
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
-    setMessage("");
     setIsPending(true);
 
     try {
-      const supabase = createClient();
+      const formData = new FormData();
+      formData.set("email", email.trim());
+      formData.set("password", password);
 
-      if (mode === "signin") {
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-          email: email.trim(),
-          password,
-        });
+      const result = mode === "signin" ? await signIn(formData) : await signUp(formData);
 
-        if (signInError) {
-          setError(signInError.message);
-          return;
-        }
-
-        router.push("/app");
-        router.refresh();
+      if ("error" in result) {
+        setError(result.error);
         return;
       }
 
-      const { data, error: signUpError } = await supabase.auth.signUp({
-        email: email.trim(),
-        password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/auth/confirm`,
-        },
-      });
-
-      if (signUpError) {
-        setError(signUpError.message);
-        return;
-      }
-
-      if (data.session) {
-        router.push("/app");
-        router.refresh();
-        return;
-      }
-
-      setMessage("Check your email to confirm your account, then sign in.");
-    } catch (caught) {
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : "Could not reach the authentication service."
-      );
+      router.push("/app");
+      router.refresh();
+    } catch {
+      setError("Could not reach the authentication service. Please try again.");
     } finally {
       setIsPending(false);
     }
@@ -156,10 +124,10 @@ export function AuthForm({ initialError }: AuthFormProps) {
               type={showPassword ? "text" : "password"}
               autoComplete={mode === "signin" ? "current-password" : "new-password"}
               required
-              minLength={6}
+              minLength={8}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="At least 6 characters"
+              placeholder="At least 8 characters"
               className={`${inputClass} pr-10`}
             />
             <button
@@ -176,11 +144,6 @@ export function AuthForm({ initialError }: AuthFormProps) {
         {error && (
           <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
             {error}
-          </p>
-        )}
-        {message && (
-          <p className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
-            {message}
           </p>
         )}
 

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { parseReplyInput, replyInputSchema, saveReplySchema } from "./validation";
+import {
+  parseReplyInput,
+  replyInputSchema,
+  saveReplySchema,
+  signInSchema,
+  signUpSchema,
+} from "./validation";
 
 const valid = {
   businessName: "Acme Salon",
@@ -152,5 +158,43 @@ describe("parseReplyInput", () => {
     if (!result.success) {
       expect(result.error.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("auth schemas", () => {
+  it("trims and lowercases a valid email", () => {
+    const parsed = signUpSchema.parse({
+      email: "  Owner@Example.COM ",
+      password: "password123",
+    });
+
+    expect(parsed.email).toBe("owner@example.com");
+  });
+
+  it("rejects an invalid email", () => {
+    expect(
+      signUpSchema.safeParse({ email: "not-an-email", password: "password123" })
+        .success
+    ).toBe(false);
+  });
+
+  it("requires at least 8 password characters on signup", () => {
+    expect(
+      signUpSchema.safeParse({ email: "owner@example.com", password: "1234567" })
+        .success
+    ).toBe(false);
+    expect(
+      signUpSchema.safeParse({ email: "owner@example.com", password: "12345678" })
+        .success
+    ).toBe(true);
+  });
+
+  it("requires a non-empty password on signin", () => {
+    expect(
+      signInSchema.safeParse({ email: "owner@example.com", password: "" }).success
+    ).toBe(false);
+    expect(
+      signInSchema.safeParse({ email: "owner@example.com", password: "x" }).success
+    ).toBe(true);
   });
 });

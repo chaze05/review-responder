@@ -1,4 +1,3 @@
-import { cookies } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
 
 export const SESSION_COOKIE = "review-session";
@@ -40,29 +39,4 @@ export async function verifySession(token: string): Promise<Session | null> {
   } catch {
     return null;
   }
-}
-
-export async function getSession(): Promise<Session | null> {
-  const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  return token ? verifySession(token) : null;
-}
-
-export async function setSessionCookie(token: string): Promise<void> {
-  (await cookies()).set(SESSION_COOKIE, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: SESSION_DAYS * 24 * 60 * 60,
-  });
-}
-
-export async function clearSessionCookie(): Promise<void> {
-  (await cookies()).set(SESSION_COOKIE, "", {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: 0,
-  });
 }

@@ -71,3 +71,23 @@ export function parseSaveReply(
     ? { success: true, data: result.data }
     : { success: false, error: firstIssue(result) };
 }
+
+const authEmailSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .pipe(z.email({ error: "Enter a valid email address." }));
+
+export const signUpSchema = z.object({
+  email: authEmailSchema,
+  password: z.string().min(8, "Password must be at least 8 characters.").max(200),
+});
+
+export const signInSchema = z.object({
+  email: authEmailSchema,
+  password: z.string().min(1, "Password is required.").max(200),
+});
+
+export type SignUpInput = z.infer<typeof signUpSchema>;
+export type SignInInput = z.infer<typeof signInSchema>;
+
