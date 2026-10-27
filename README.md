@@ -1,5 +1,9 @@
 # Review Responder
 
+**Live demo:** <https://review-responder-omega.vercel.app>
+
+> Auth and saved history work on the live demo. AI generation needs `GEMINI_API_KEY` set in the Vercel project; until then the composer shows the "AI is not configured" message.
+
 Standalone version: paste a customer review, choose a tone, and get an editable reply you can copy or save. No Supabase — just Next.js, PostgreSQL, native RLS, and local email/password auth.
 
 ## Features
