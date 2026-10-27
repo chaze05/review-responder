@@ -63,7 +63,11 @@ describe("replyInputSchema", () => {
   });
 
   it("accepts omitted and null ratings", () => {
-    const { rating: _rating, ...withoutRating } = valid;
+    const withoutRating = {
+      businessName: valid.businessName,
+      reviewText: valid.reviewText,
+      tone: valid.tone,
+    };
 
     expect(replyInputSchema.safeParse(withoutRating).success).toBe(true);
     expect(replyInputSchema.safeParse({ ...valid, rating: null }).success).toBe(true);
